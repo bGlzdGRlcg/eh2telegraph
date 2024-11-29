@@ -20,7 +20,7 @@ jobs:
       - name: Set up Rust
         uses: actions-rs/toolchain@v1 # 设置Rust工具链
         with:
-          toolchain: stable # 使用稳定版Rust工具链
+          toolchain: nightly # 使用nightly Rust工具链
           profile: minimal # 使用最小化配置文件
           override: true # 覆盖任何现有的Rust工具链设置
 
