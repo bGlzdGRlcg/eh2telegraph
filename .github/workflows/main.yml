@@ -85,42 +85,42 @@ jobs:
 
       # 下载Linux x86_64平台的构建产物
       - name: Download artifact (Linux-x86_64)
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: ubuntu-latest-bot
           path: artifacts/ubuntu
 
       # 下载macOS x86_64平台的构建产物
       - name: Download artifact (macOS-x86_64)
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: macos-latest-bot
           path: artifacts/macos
 
       # 下载Windows x86_64平台的构建产物
       - name: Download artifact (Windows-x86_64)
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: windows-latest-bot
           path: artifacts/windows
 
       # 下载Linux aarch64平台的构建产物
       - name: Download artifact (Linux-aarch64)
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: ubuntu-latest-bot-aarch64
           path: artifacts/ubuntu
 
       # 下载macOS aarch64平台的构建产物
       - name: Download artifact (macOS-aarch64)
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: macos-latest-bot-aarch64
           path: artifacts/macos
 
       # 下载Windows aarch64平台的构建产物
       - name: Download artifact (Windows-aarch64)
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: windows-latest-bot-aarch64
           path: artifacts/windows
