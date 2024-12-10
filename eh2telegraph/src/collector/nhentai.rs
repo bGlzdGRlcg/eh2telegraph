@@ -26,12 +26,11 @@ lazy_static::lazy_static! {
 }
 
 const DOMAIN_LIST: [&str; 0] = [];
-const NH_CDN_LIST: [&str; 5] = [
-    "https://i.nhentai.net/galleries",
+const NH_CDN_LIST: [&str; 4] = [
+    "https://i1.nhentai.net/galleries",
     "https://i2.nhentai.net/galleries",
     "https://i3.nhentai.net/galleries",
-    "https://i5.nhentai.net/galleries",
-    "https://i7.nhentai.net/galleries",
+    "https://i4.nhentai.net/galleries",
 ];
 
 #[derive(Debug, Clone, Default)]
@@ -103,6 +102,8 @@ enum ImageType {
     Png,
     #[serde(rename = "g")]
     Gif,
+    #[serde(rename = "w")]
+    Webp,
 }
 
 impl ImageType {
@@ -111,6 +112,7 @@ impl ImageType {
             ImageType::Jpg => ".jpg",
             ImageType::Png => ".png",
             ImageType::Gif => ".gif",
+            ImageType::Webp => ".webp",
         }
     }
 }
