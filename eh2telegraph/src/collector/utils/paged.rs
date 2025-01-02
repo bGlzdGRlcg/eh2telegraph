@@ -43,8 +43,7 @@ where
         let content = client
             .get_builder(&url)
             .send()
-            .await
-            .and_then(Response::error_for_status)?
+            .await?
             .text()
             .await?;
         self.next_page += 1;
