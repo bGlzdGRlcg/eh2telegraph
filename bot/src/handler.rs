@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashSet};
+use std::{borrow::Cow, collections::HashSet, sync::Arc};
 
 use eh2telegraph::{
     collector::{e_hentai::EHCollector, exhentai::EXCollector, nhentai::NHCollector},
@@ -22,6 +22,9 @@ use teloxide::{
     },
 };
 use tracing::{info, trace};
+use std::collections::HashMap;
+use tokio::sync::oneshot;
+use std::sync::Mutex;
 
 use crate::{ok_or_break, util::PrettyChat};
 
@@ -42,16 +45,18 @@ const MIN_SIMILARITY_PRIVATE: u8 = 50;
     目前支持这些指令:"
 )]
 pub enum Command {
-    #[command(description = "Display this help. 显示这条帮助信息。")]
+    #[command(description = "Display this help. 显示这条帮助信息")]
     Help,
-    #[command(description = "Show bot verison. 显示机器人版本。")]
+    #[command(description = "Show bot verison. 显示机器人版本")]
     Version,
-    #[command(description = "Show your account id. 显示你的账号 ID。")]
+    #[command(description = "Show your account id. 显示你的账号 ID")]
     Id,
     #[command(
         description = "Sync a gallery(e-hentai/exhentai/nhentai are supported now). 同步一个画廊(目前支持 EH/EX/NH)"
     )]
     Sync(String),
+    #[command(description = "Cancel current sync operation. 取消当前正在进行的本子同步")]
+    Cancel,
 }
 
 #[derive(BotCommands, Clone)]
@@ -69,6 +74,9 @@ pub struct Handler<C> {
     pub whitelist: HashSet<i64>,  // Add whitelist
 
     single_flight: singleflight_async::SingleFlight<String>,
+    
+    // Add this field to track active syncs
+    active_syncs: Arc<Mutex<HashMap<i64, oneshot::Sender<()>>>>,
 }
 
 impl<C> Handler<C>
@@ -76,7 +84,7 @@ where
     C: KVStorage<String> + Send + Sync + 'static,
 {
     pub fn new(synchronizer: Synchronizer<C>, admins: HashSet<i64>) -> Self {
-        // Read whitelist
+        // Read whitelist ids
         let whitelist = match config::parse::<WhitelistConfig>("whitelist")
             .ok()
             .and_then(|x| x) 
@@ -91,7 +99,7 @@ where
                 }
             }
             None => {
-                // No white list, all ppl can use
+                // No whitelist, all ppl can use
                 HashSet::from([i64::MIN])
             }
         };  
@@ -102,8 +110,8 @@ where
             convertor: FHashConvertor::new_from_config(),
             admins,
             whitelist,
-
             single_flight: Default::default(),
+            active_syncs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -116,6 +124,28 @@ where
             return true;
         }
         self.whitelist.contains(&chat_id)
+    }
+
+    // Add these new helper methods for sync cancellation
+    fn register_sync(&self, user_id: i64) -> oneshot::Receiver<()> {
+        let (tx, rx) = oneshot::channel();
+        self.active_syncs.lock().unwrap().insert(user_id, tx);
+        rx
+    }
+
+    fn unregister_sync(&self, user_id: i64) {
+        self.active_syncs.lock().unwrap().remove(&user_id);
+    }
+
+    fn cancel_sync(&self, user_id: i64) -> bool {
+        if let Some(tx) = self.active_syncs.lock().unwrap().remove(&user_id) {
+            // Send cancellation signal
+            let _ = tx.send(());
+            info!("[cancel handler] user {} cancelled their sync operation", user_id);
+            true
+        } else {
+            false
+        }
     }
 
     // Add unauthorized response
@@ -184,11 +214,34 @@ where
                         .reply_to_message_id(msg.id)
                         .await
                 );
+                
+                // Register this sync with the user's ID
+                let cancel_rx = self.register_sync(msg.chat.id.0);
+                
                 tokio::spawn(async move {
+                    let result = self.sync_response(&url, cancel_rx).await;
+                    
+                    // Unregister sync when done
+                    self.unregister_sync(msg.chat.id.0);
+                    
                     let _ = bot
-                        .edit_message_text(msg.chat.id, msg.id, self.sync_response(&url).await)
+                        .edit_message_text(msg.chat.id, msg.id, result)
                         .await;
                 });
+            }
+            Command::Cancel => {
+                let cancelled = self.cancel_sync(msg.chat.id.0);
+                if cancelled {
+                    let _ = bot
+                        .send_message(msg.chat.id, escape("Sync operation cancelled."))
+                        .reply_to_message_id(msg.id)
+                        .await;
+                } else {
+                    let _ = bot
+                        .send_message(msg.chat.id, escape("No active sync operation to cancel."))
+                        .reply_to_message_id(msg.id)
+                        .await;
+                }
             }
         };
 
@@ -258,9 +311,18 @@ where
                     .reply_to_message_id(msg.id)
                     .await
             );
+            
+            // Register this sync with the user's ID
+            let cancel_rx = self.register_sync(msg.chat.id.0);
+            
             tokio::spawn(async move {
+                let result = self.sync_response(&url, cancel_rx).await;
+                
+                // Unregister sync when done
+                self.unregister_sync(msg.chat.id.0);
+                
                 let _ = bot
-                    .edit_message_text(msg.chat.id, msg.id, self.sync_response(&url).await)
+                    .edit_message_text(msg.chat.id, msg.id, result)
                     .await;
             });
             return ControlFlow::Break(());
@@ -321,10 +383,18 @@ where
                         .reply_to_message_id(msg.id)
                         .await
                 );
-                let url = url.to_string();
+                
+                // Register this sync with the user's ID
+                let cancel_rx = self.register_sync(msg.chat.id.0);
+                
                 tokio::spawn(async move {
+                    let result = self.sync_response(&url, cancel_rx).await;
+                    
+                    // Unregister sync when done
+                    self.unregister_sync(msg.chat.id.0);
+                    
                     let _ = bot
-                        .edit_message_text(msg.chat.id, msg.id, self.sync_response(&url).await)
+                        .edit_message_text(msg.chat.id, msg.id, result)
                         .await;
                 });
                 ControlFlow::Break(())
@@ -400,9 +470,17 @@ where
             .reply_to_message_id(msg.id)
             .await
         {
+            // Register this sync with the user's ID
+            let cancel_rx = self.register_sync(msg.chat.id.0);
+            
             tokio::spawn(async move {
+                let result = self.sync_response(&url, cancel_rx).await;
+                
+                // Unregister sync when done
+                self.unregister_sync(msg.chat.id.0);
+                
                 let _ = bot
-                    .edit_message_text(msg.chat.id, msg.id, self.sync_response(&url).await)
+                    .edit_message_text(msg.chat.id, msg.id, result)
                     .await;
             });
         }
@@ -417,7 +495,7 @@ where
     ) -> ControlFlow<()> {
         if msg.chat.is_private() {
             ok_or_break!(
-                bot.send_message(msg.chat.id, escape("Unrecognized message."))
+                bot.send_message(msg.chat.id, escape("Unrecognized message. Maybe /help ?"))
                     .reply_to_message_id(msg.id)
                     .await
             );
@@ -427,9 +505,10 @@ where
         ControlFlow::Break(())
     }
 
-    async fn sync_response(&self, url: &str) -> String {
-        self.single_flight
-            .work(url, || async {
+    // Updated sync_response method with cancellation
+    async fn sync_response(&self, url: &str, mut cancel_rx: oneshot::Receiver<()>) -> String {
+        tokio::select! {
+            result = self.single_flight.work(url, || async {
                 match self.route_sync(url).await {
                     Ok(url) => {
                         format!("Sync to telegraph finished: {}", link(&url, &escape(&url)))
@@ -438,8 +517,11 @@ where
                         format!("Sync to telegraph failed: {}", escape(&e.to_string()))
                     }
                 }
-            })
-            .await
+            }) => result,
+            _ = &mut cancel_rx => {
+                "Sync operation was cancelled.".to_string()
+            }
+        }
     }
 
     async fn route_sync(&self, url: &str) -> anyhow::Result<String> {
