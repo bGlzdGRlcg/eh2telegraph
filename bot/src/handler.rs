@@ -55,7 +55,7 @@ pub enum Command {
         description = "Sync a gallery(e-hentai/exhentai/nhentai are supported now). 同步一个画廊(目前支持 EH/EX/NH)"
     )]
     Sync(String),
-    #[command(description = "Cancel current sync operation. 取消当前正在进行的本子同步")]
+    #[command(description = "Cancel all ongoing sync operations. 取消所有正在进行的同步操作。")]
     Cancel,
 }
 
@@ -75,8 +75,8 @@ pub struct Handler<C> {
 
     single_flight: singleflight_async::SingleFlight<String>,
 
-    // Add this field to track active syncs
-    active_syncs: Arc<Mutex<HashMap<i64, oneshot::Sender<()>>>>,
+    // One user can have multiple active syncs
+    active_syncs: Arc<Mutex<HashMap<i64, Vec<(String, oneshot::Sender<()>)>>>>,
 }
 
 impl<C> Handler<C>
@@ -126,28 +126,60 @@ where
         self.whitelist.contains(&chat_id)
     }
 
-    // Add these new helper methods for sync cancellation
-    fn register_sync(&self, user_id: i64) -> oneshot::Receiver<()> {
+    // Support Multiple Sync Task
+    fn register_sync(&self, user_id: i64, url: &str) -> oneshot::Receiver<()> {
         let (tx, rx) = oneshot::channel();
-        self.active_syncs.lock().unwrap().insert(user_id, tx);
+
+        let mut active_syncs = self.active_syncs.lock().unwrap();
+
+        let user_syncs = active_syncs.entry(user_id).or_insert_with(Vec::new);
+
+        user_syncs.push((url.to_string(), tx));
+
         rx
     }
 
-    fn unregister_sync(&self, user_id: i64) {
-        self.active_syncs.lock().unwrap().remove(&user_id);
+    fn unregister_sync(&self, user_id: i64, url: &str) {
+        let mut active_syncs = self.active_syncs.lock().unwrap();
+
+        if active_syncs.contains_key(&user_id) {
+            let should_remove_entry = {
+                let user_syncs = active_syncs.get_mut(&user_id).unwrap();
+
+                user_syncs.retain(|(sync_url, _)| sync_url != url);
+
+                user_syncs.is_empty()
+            };
+
+            if should_remove_entry {
+                active_syncs.remove(&user_id);
+            }
+        }
     }
 
-    fn cancel_sync(&self, user_id: i64) -> bool {
-        if let Some(tx) = self.active_syncs.lock().unwrap().remove(&user_id) {
-            // Send cancellation signal
-            let _ = tx.send(());
+    fn cancel_all_syncs(&self, user_id: i64) -> usize {
+        let mut active_syncs = self.active_syncs.lock().unwrap();
+
+        if let Some(user_syncs) = active_syncs.remove(&user_id) {
+            let count = user_syncs.len();
+
+            // Send all cancellation signal
+            for (url, tx) in user_syncs {
+                info!(
+                    "[cancel handler] cancelling sync for user {} and url {}",
+                    user_id, url
+                );
+                let _ = tx.send(());
+            }
+
             info!(
-                "[cancel handler] user {} cancelled their sync operation",
-                user_id
+                "[cancel handler] user {} cancelled {} sync operations",
+                user_id, count
             );
-            true
+
+            count
         } else {
-            false
+            0
         }
     }
 
@@ -218,28 +250,30 @@ where
                         .await
                 );
 
-                // Register this sync with the user's ID
-                let cancel_rx = self.register_sync(msg.chat.id.0);
+                let url_clone = url.clone();
+                let cancel_rx = self.register_sync(msg.chat.id.0, &url);
 
                 tokio::spawn(async move {
                     let result = self.sync_response(&url, cancel_rx).await;
 
-                    // Unregister sync when done
-                    self.unregister_sync(msg.chat.id.0);
+                    self.unregister_sync(msg.chat.id.0, &url_clone);
 
                     let _ = bot.edit_message_text(msg.chat.id, msg.id, result).await;
                 });
             }
             Command::Cancel => {
-                let cancelled = self.cancel_sync(msg.chat.id.0);
-                if cancelled {
+                let cancelled_count = self.cancel_all_syncs(msg.chat.id.0);
+                if cancelled_count > 0 {
                     let _ = bot
-                        .send_message(msg.chat.id, escape("Sync operation cancelled."))
+                        .send_message(
+                            msg.chat.id,
+                            escape(&format!("Cancelled {} sync operations.", cancelled_count)),
+                        )
                         .reply_to_message_id(msg.id)
                         .await;
                 } else {
                     let _ = bot
-                        .send_message(msg.chat.id, escape("No active sync operation to cancel."))
+                        .send_message(msg.chat.id, escape("No active sync operations to cancel."))
                         .reply_to_message_id(msg.id)
                         .await;
                 }
@@ -313,14 +347,13 @@ where
                     .await
             );
 
-            // Register this sync with the user's ID
-            let cancel_rx = self.register_sync(msg.chat.id.0);
+            let url_clone = url.clone();
+            let cancel_rx = self.register_sync(msg.chat.id.0, &url);
 
             tokio::spawn(async move {
                 let result = self.sync_response(&url, cancel_rx).await;
 
-                // Unregister sync when done
-                self.unregister_sync(msg.chat.id.0);
+                self.unregister_sync(msg.chat.id.0, &url_clone);
 
                 let _ = bot.edit_message_text(msg.chat.id, msg.id, result).await;
             });
@@ -383,14 +416,13 @@ where
                         .await
                 );
 
-                // Register this sync with the user's ID
-                let cancel_rx = self.register_sync(msg.chat.id.0);
+                let url_clone = url.clone();
+                let cancel_rx = self.register_sync(msg.chat.id.0, &url);
 
                 tokio::spawn(async move {
                     let result = self.sync_response(&url, cancel_rx).await;
 
-                    // Unregister sync when done
-                    self.unregister_sync(msg.chat.id.0);
+                    self.unregister_sync(msg.chat.id.0, &url_clone);
 
                     let _ = bot.edit_message_text(msg.chat.id, msg.id, result).await;
                 });
@@ -467,14 +499,13 @@ where
             .reply_to_message_id(msg.id)
             .await
         {
-            // Register this sync with the user's ID
-            let cancel_rx = self.register_sync(msg.chat.id.0);
+            let url_clone = url.clone();
+            let cancel_rx = self.register_sync(msg.chat.id.0, &url);
 
             tokio::spawn(async move {
                 let result = self.sync_response(&url, cancel_rx).await;
 
-                // Unregister sync when done
-                self.unregister_sync(msg.chat.id.0);
+                self.unregister_sync(msg.chat.id.0, &url_clone);
 
                 let _ = bot.edit_message_text(msg.chat.id, msg.id, result).await;
             });
@@ -505,8 +536,8 @@ where
         tokio::select! {
             result = self.single_flight.work(url, || async {
                 match self.route_sync(url).await {
-                    Ok(url) => {
-                        format!("Sync to telegraph finished: {}", link(&url, &escape(&url)))
+                    Ok(sync_url) => {
+                        format!("Sync to telegraph finished: {}", link(&sync_url, &escape(&sync_url)))
                     }
                     Err(e) => {
                         format!("Sync to telegraph failed: {}", escape(&e.to_string()))
