@@ -243,14 +243,15 @@ where
         I: Into<Cow<'static, [u8]>>,
     {
         let mut results = Vec::new();
-        
+
         for data in files.into_iter() {
             let form = Form::new()
                 .text("reqtype", "fileupload")
                 .text("userhash", "") // Empty string for anonymous upload
                 .part("fileToUpload", Part::bytes(data).file_name("image.jpg"));
 
-            let response = self.client
+            let response = self
+                .client
                 .post_builder("https://catbox.moe/user/api.php")
                 .multipart(form)
                 .send()
@@ -258,7 +259,7 @@ where
                 .and_then(Response::error_for_status)?;
 
             let url = response.text().await?;
-            
+
             // catbox.moe returns just the URL as plain text
             if url.starts_with("https://files.catbox.moe/") {
                 results.push(MediaInfo { src: url });

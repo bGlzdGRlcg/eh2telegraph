@@ -13,6 +13,8 @@ use eh2telegraph::{
 };
 
 use reqwest::Url;
+use std::collections::HashMap;
+use std::sync::Mutex;
 use teloxide::{
     adaptors::DefaultParseMode,
     prelude::*,
@@ -21,10 +23,8 @@ use teloxide::{
         markdown::{code_inline, escape, link},
     },
 };
-use tracing::{info, trace};
-use std::collections::HashMap;
 use tokio::sync::oneshot;
-use std::sync::Mutex;
+use tracing::{info, trace};
 
 use crate::{ok_or_break, util::PrettyChat};
 
@@ -71,10 +71,10 @@ pub struct Handler<C> {
     pub searcher: SaucenaoSearcher,
     pub convertor: FHashConvertor,
     pub admins: HashSet<i64>,
-    pub whitelist: HashSet<i64>,  // Add whitelist
+    pub whitelist: HashSet<i64>, // Add whitelist
 
     single_flight: singleflight_async::SingleFlight<String>,
-    
+
     // Add this field to track active syncs
     active_syncs: Arc<Mutex<HashMap<i64, oneshot::Sender<()>>>>,
 }
@@ -87,7 +87,7 @@ where
         // Read whitelist ids
         let whitelist = match config::parse::<WhitelistConfig>("whitelist")
             .ok()
-            .and_then(|x| x) 
+            .and_then(|x| x)
         {
             Some(config) => {
                 if config.enabled {
@@ -102,7 +102,7 @@ where
                 // No whitelist, all ppl can use
                 HashSet::from([i64::MIN])
             }
-        };  
+        };
 
         Self {
             synchronizer,
@@ -141,7 +141,10 @@ where
         if let Some(tx) = self.active_syncs.lock().unwrap().remove(&user_id) {
             // Send cancellation signal
             let _ = tx.send(());
-            info!("[cancel handler] user {} cancelled their sync operation", user_id);
+            info!(
+                "[cancel handler] user {} cancelled their sync operation",
+                user_id
+            );
             true
         } else {
             false
@@ -214,19 +217,17 @@ where
                         .reply_to_message_id(msg.id)
                         .await
                 );
-                
+
                 // Register this sync with the user's ID
                 let cancel_rx = self.register_sync(msg.chat.id.0);
-                
+
                 tokio::spawn(async move {
                     let result = self.sync_response(&url, cancel_rx).await;
-                    
+
                     // Unregister sync when done
                     self.unregister_sync(msg.chat.id.0);
-                    
-                    let _ = bot
-                        .edit_message_text(msg.chat.id, msg.id, result)
-                        .await;
+
+                    let _ = bot.edit_message_text(msg.chat.id, msg.id, result).await;
                 });
             }
             Command::Cancel => {
@@ -311,19 +312,17 @@ where
                     .reply_to_message_id(msg.id)
                     .await
             );
-            
+
             // Register this sync with the user's ID
             let cancel_rx = self.register_sync(msg.chat.id.0);
-            
+
             tokio::spawn(async move {
                 let result = self.sync_response(&url, cancel_rx).await;
-                
+
                 // Unregister sync when done
                 self.unregister_sync(msg.chat.id.0);
-                
-                let _ = bot
-                    .edit_message_text(msg.chat.id, msg.id, result)
-                    .await;
+
+                let _ = bot.edit_message_text(msg.chat.id, msg.id, result).await;
             });
             return ControlFlow::Break(());
         }
@@ -383,19 +382,17 @@ where
                         .reply_to_message_id(msg.id)
                         .await
                 );
-                
+
                 // Register this sync with the user's ID
                 let cancel_rx = self.register_sync(msg.chat.id.0);
-                
+
                 tokio::spawn(async move {
                     let result = self.sync_response(&url, cancel_rx).await;
-                    
+
                     // Unregister sync when done
                     self.unregister_sync(msg.chat.id.0);
-                    
-                    let _ = bot
-                        .edit_message_text(msg.chat.id, msg.id, result)
-                        .await;
+
+                    let _ = bot.edit_message_text(msg.chat.id, msg.id, result).await;
                 });
                 ControlFlow::Break(())
             }
@@ -472,16 +469,14 @@ where
         {
             // Register this sync with the user's ID
             let cancel_rx = self.register_sync(msg.chat.id.0);
-            
+
             tokio::spawn(async move {
                 let result = self.sync_response(&url, cancel_rx).await;
-                
+
                 // Unregister sync when done
                 self.unregister_sync(msg.chat.id.0);
-                
-                let _ = bot
-                    .edit_message_text(msg.chat.id, msg.id, result)
-                    .await;
+
+                let _ = bot.edit_message_text(msg.chat.id, msg.id, result).await;
             });
         }
 

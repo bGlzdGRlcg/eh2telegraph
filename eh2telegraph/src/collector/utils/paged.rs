@@ -40,12 +40,7 @@ where
     {
         let url = self.page_indicator.format_n(self.next_page);
 
-        let content = client
-            .get_builder(&url)
-            .send()
-            .await?
-            .text()
-            .await?;
+        let content = client.get_builder(&url).send().await?.text().await?;
         self.next_page += 1;
         Ok(content)
     }
