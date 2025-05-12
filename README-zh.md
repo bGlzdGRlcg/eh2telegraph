@@ -1,5 +1,7 @@
 # eh2telegraph
 
+中文|[英文](README.md)
+
 自动从 EH/EX/NH 下载图片集并上传至 Telegraph 的 Bot。
 
 本代码只保证在 MacOS（部分功能）和 Linux 上可以正确运行。
